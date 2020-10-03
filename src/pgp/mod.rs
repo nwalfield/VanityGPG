@@ -74,7 +74,7 @@ pub trait Backend {
 
     fn shuffle(&mut self) -> Result<(), PGPError>;
 
-    fn get_armored_results(self, uid: &UserID) -> Result<ArmoredKey, UniversalError>;
+    fn get_armored_results(&self, uid: &UserID) -> Result<ArmoredKey, UniversalError>;
 }
 
 impl FromStr for UserID {

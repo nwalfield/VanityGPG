@@ -182,12 +182,11 @@ impl Counter {
         }
     }
 
-    fn count_total(&self) {
-        self.total.fetch_add(1, Ordering::SeqCst);
+    fn count_total(&self, n: usize) {
+        self.total.fetch_add(n, Ordering::SeqCst);
     }
 
     fn count_success(&self) {
-        self.count_total();
         self.success.fetch_add(1, Ordering::SeqCst);
     }
 
@@ -228,7 +227,7 @@ impl<B: Backend> Key<B> {
         pattern.is_match(&self.backend.fingerprint())
     }
 
-    fn save_key(self, user_id: &UserID, dry_run: bool) -> Result<(), Error> {
+    fn save_key(&self, user_id: &UserID, dry_run: bool) -> Result<(), Error> {
         if dry_run {
             return Ok(());
         }
@@ -272,38 +271,33 @@ fn main() -> Result<(), Error> {
 
     let cipher_suite = CipherSuite::from_str(&opts.cipher_suite)?;
 
-    // Generate initial keys
-    let mut keys: Vec<Key<DefaultBackend>> = (0..opts.pool_size as usize)
-        .into_par_iter()
-        .map(|_| {
-            let backend = DefaultBackend::new(cipher_suite.clone()).unwrap();
-            Key::new(backend)
-        })
-        .collect();
-
     let user_id = UserID::from(opts.user_id);
     let dry_run = opts.dry_run;
+    // let pattern = Regex::new(&opts.pattern)?;
+    let pattern = &opts.pattern[..];
     // Enter loop
     loop {
-        let pattern = Regex::new(&opts.pattern)?;
-        keys = keys
-            .into_par_iter()
-            .map(|mut key: Key<DefaultBackend>| {
+        (0..std::usize::MAX).into_par_iter()
+            .for_each(|_| {
+                let backend = DefaultBackend::new(cipher_suite.clone()).unwrap();
+                let key: Key<DefaultBackend> = Key::new(backend);
                 let counter_cloned = Arc::clone(&counter);
-                if key.check(&pattern) {
-                    warn!("found [{}]", key.get_fingerprint());
-                    counter_cloned.count_success();
-                    key.save_key(&user_id, dry_run).unwrap_or(());
-                    let backend = DefaultBackend::new(cipher_suite.clone()).unwrap();
-                    Key::new(backend)
-                } else {
-                    counter_cloned.count_total();
-                    #[cfg(not(feature = "za_warudo"))]
-                    thread::sleep(Duration::from_secs(1));
+                let tries: usize = 30 * 24 * 60 * 60;
+                (0..tries).fold(key, |mut key, _| {
+                    // if key.check(&pattern) {
+                    let fpr = key.get_fingerprint();
+                    if fpr.ends_with(pattern) {
+                        warn!("found [{}]", fpr);
+                        counter_cloned.count_success();
+                        key.save_key(&user_id, dry_run).unwrap_or(());
+                    } else {
+                        #[cfg(not(feature = "za_warudo"))]
+                        thread::sleep(Duration::from_secs(1));
+                    }
                     key.shuffle().unwrap_or(());
                     key
-                }
+                });
+                counter_cloned.count_total(tries);
             })
-            .collect();
     }
 }
